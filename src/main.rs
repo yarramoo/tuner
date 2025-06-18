@@ -17,9 +17,12 @@ use microbit::{
     }, pac::{saadc::SAMPLERATE, CLOCK, TIMER0},
 };
 
-const TIMER_TICKS_PER_SECOND: u32 = 1_000_000;
-
-const INIT_TEST_SAMPLES: u32 = 10_000;
+const TIMER_TICKS_PER_SECOND: usize = 1_000_000;
+const SAMPLE_RATE: usize = 8_000;
+const SAMPLE_PERIOD_CYCLES: usize = TIMER_TICKS_PER_SECOND / SAMPLE_RATE;
+const SAMPLES: usize = 500;
+const LAG_MIN: usize = 8;
+const LAG_MAX: usize = 100;
 
 #[entry]
 fn main() -> ! {
@@ -41,7 +44,7 @@ fn main() -> ! {
         .mic_run
         .into_open_drain_output(OpenDrainConfig::Disconnect0HighDrive1, Level::High);
 
-    let middle = find_middle(&mut saadc, &mut mic_in, INIT_TEST_SAMPLES);
+    let sam
     
     let mut samples = 0;
     let mut last_sample = 0;
@@ -66,32 +69,25 @@ fn main() -> ! {
     }
 }
 
-fn find_middle<PIN>(saadc: &mut Saadc, mic_in: &mut PIN, samples: u32) -> u16 
-where
-    PIN: Channel
-{
-    let mut total: u32 = 0;
-    for _ in 0..samples {
-        let mic_value = saadc
-            .read_channel(mic_in)
-            .expect("could not read value of microphone") as u16;
-        total += mic_value as u32;
-    }
-    return (total / samples) as u16;
-}
-
-fn is_between(mid: u16, a: u16, b: u16) -> bool {
-    (a <= mid && b > mid) || (a >= mid && b < mid)
-}
-
-// Is there a way to make this generic over the actual clock?
-fn timer_wait(timer: &mut Timer<TIMER0, Periodic>) {
-    loop {
-        match timer.reset_if_finished() {
-            true => {
-                return;
-            },
-            false => {},
+fn asmd_frequency(samples: &[u16], lag_range: RangeInclusive<usize>, sample_rate: usize) -> usize {
+    let mut min_asmd = usize::MAX;
+    let mut closest_matching_lag = 0;
+    for lag in lag_range {
+        let asmd = asmd(samples, lag);
+        if asmd < min_asmd {
+            min_asmd = asmd;
+            closest_matching_lag = lag;
         }
     }
+    sample_rate / closest_matching_lag
+}
+
+// Averaged square mean difference
+fn asmd(x: &[u16], lag: usize) -> usize {
+    let n = x.len();
+    let mut total = 0;
+    for i in 0..n - lag - 1 {
+        total += (x[i] - x[i + lag]).pow(2) as usize;
+    }
+    total / (n - lag)
 }
