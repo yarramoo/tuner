@@ -11,13 +11,14 @@ use microbit::{
     board::Board,
     display::blocking::Display,
     hal::{
-        gpio::{Level, OpenDrainConfig}, saadc::SaadcConfig, timer::{OneShot, Periodic}, Saadc, Timer
+        gpio::{Level, OpenDrainConfig}, saadc::{Channel, SaadcConfig}, timer::{self, OneShot, Periodic}, Saadc, Timer
     }, pac::{saadc::SAMPLERATE, TIMER0},
 };
 
-const SAMPLE_RATE: u64 = 8_000;
-const SAMPLE_DELAY: u64 = 1_000_000 / SAMPLE_RATE;
-const SAMPLE_PERIOD_US: u32 = 125;
+const SAMPLE_RATE: u32 = 8_000;
+const SAMPLE_DELAY: u32 = 1_000_000 / SAMPLE_RATE;
+
+const INIT_TEST_SAMPLES: u32 = 1_000;
 
 #[entry]
 fn main() -> ! {
@@ -39,29 +40,51 @@ fn main() -> ! {
         .mic_run
         .into_open_drain_output(OpenDrainConfig::Disconnect0HighDrive1, Level::High);
 
-    let mut count = 0;
-    let mut sum = 0;
-    let (mut max, mut min) = (0, 0);
+    let middle = find_middle(&mut saadc, &mut mic_in, INIT_TEST_SAMPLES);
 
-    timer.start(SAMPLE_PERIOD_US);
+    timer.start(SAMPLE_DELAY);
+    
+    let mut samples = 0;
+    let mut last_sample = 0;
+    let mut sample = 0;
+    let mut middle_crosses = 0;
 
     loop {
         timer_wait(&mut timer);
-        // rprintln!("cycles={}", cycles);
-        let mic_value = saadc.read_channel(&mut mic_in).expect("could not read value of microphone") as u16;
-        count += 1;
-        if count % 10000 == 0 {
-            max = sum / count;
-            min = sum / count;
+        sample = saadc.read_channel(&mut mic_in).expect("could not read value of microphone") as u16;
+        samples += 1;
+        if is_between(middle, last_sample, sample) {
+            middle_crosses += 1;
         }
-        sum += mic_value as u64;
-        max = max.max(mic_value as u64);
-        min = min.min(mic_value as u64);
+        last_sample = sample;
+        if samples == SAMPLE_RATE {
+            rprintln!("{}", middle_crosses / 2);
+            samples = 0;
+            middle_crosses = 0;
+        }
         // rprintln!("{}, avg={}, max={}, min={}", mic_value, sum / count, max, min);
-        
     }
 }
 
+fn find_middle<PIN>(saadc: &mut Saadc, mic_in: &mut PIN, samples: u32) -> u16 
+where
+    PIN: Channel
+{
+    let mut total: u32 = 0;
+    for _ in 0..samples {
+        let mic_value = saadc
+            .read_channel(mic_in)
+            .expect("could not read value of microphone") as u16;
+        total += mic_value as u32;
+    }
+    return (total / samples) as u16;
+}
+
+fn is_between(mid: u16, a: u16, b: u16) -> bool {
+    (a < mid && b > mid) || (a > mid && b < mid)
+}
+
+// Is there a way to make this generic over the actual clock?
 fn timer_wait(timer: &mut Timer<TIMER0, Periodic>) {
     loop {
         match timer.reset_if_finished() {
@@ -70,6 +93,5 @@ fn timer_wait(timer: &mut Timer<TIMER0, Periodic>) {
             },
             false => {},
         }
-        // rprintln!("stuck :(");
     }
 }
