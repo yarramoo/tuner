@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+use core::{ops::RangeInclusive, range::Range};
+
 // use defmt_rtt as _;
 use rtt_target::{rtt_init_print, rprintln};
 use panic_rtt_target as _;
@@ -12,13 +14,12 @@ use microbit::{
     display::blocking::Display,
     hal::{
         gpio::{Level, OpenDrainConfig}, saadc::{Channel, SaadcConfig}, timer::{self, OneShot, Periodic}, Saadc, Timer
-    }, pac::{saadc::SAMPLERATE, TIMER0},
+    }, pac::{saadc::SAMPLERATE, CLOCK, TIMER0},
 };
 
-const SAMPLE_RATE: u32 = 8_000;
-const SAMPLE_DELAY: u32 = 1_000_000 / SAMPLE_RATE;
+const TIMER_TICKS_PER_SECOND: u32 = 1_000_000;
 
-const INIT_TEST_SAMPLES: u32 = 1_000;
+const INIT_TEST_SAMPLES: u32 = 10_000;
 
 #[entry]
 fn main() -> ! {
@@ -41,23 +42,22 @@ fn main() -> ! {
         .into_open_drain_output(OpenDrainConfig::Disconnect0HighDrive1, Level::High);
 
     let middle = find_middle(&mut saadc, &mut mic_in, INIT_TEST_SAMPLES);
-
-    timer.start(SAMPLE_DELAY);
     
     let mut samples = 0;
     let mut last_sample = 0;
     let mut sample = 0;
     let mut middle_crosses = 0;
 
+    timer.start(TIMER_TICKS_PER_SECOND);
+
     loop {
-        timer_wait(&mut timer);
         sample = saadc.read_channel(&mut mic_in).expect("could not read value of microphone") as u16;
         samples += 1;
         if is_between(middle, last_sample, sample) {
             middle_crosses += 1;
         }
         last_sample = sample;
-        if samples == SAMPLE_RATE {
+        if timer.reset_if_finished() {
             rprintln!("{}", middle_crosses / 2);
             samples = 0;
             middle_crosses = 0;
@@ -81,7 +81,7 @@ where
 }
 
 fn is_between(mid: u16, a: u16, b: u16) -> bool {
-    (a < mid && b > mid) || (a > mid && b < mid)
+    (a <= mid && b > mid) || (a >= mid && b < mid)
 }
 
 // Is there a way to make this generic over the actual clock?
